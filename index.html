@@ -3,28 +3,18 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>ShootingAR (Aruco fallback)</title>
+    <title>ShootingAR (AprilTag 36h11)</title>
     <style>
       html, body { margin: 0; padding: 0; background: #000; color: #0f0; font-family: monospace; }
-      #hud {
-        position: fixed; left: 8px; top: 8px; z-index: 10;
-        color: #0f0; font-size: 14px; text-shadow: 0 0 2px #000;
-        max-height: 40vh; overflow-y: auto; white-space: pre;
-        background: rgba(0,0,0,.35); padding: 6px 8px; border-radius: 4px;
-      }
+      #hud { position: fixed; left: 8px; top: 8px; z-index: 10; font-size: 14px; max-height: 40vh; overflow: auto;
+             white-space: pre; background: rgba(0,0,0,.35); padding: 6px 8px; border-radius: 4px; }
       video, canvas { position: fixed; left: 0; top: 0; width: 100vw; height: 100vh; object-fit: cover; }
       #overlay { z-index: 5; pointer-events: none; }
-      #reticle {
-        position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
-        width: 80px; height: 80px; border: 2px solid rgba(0,255,0,.6);
-        border-radius: 50%; box-shadow: 0 0 6px rgba(0,255,0,.6);
-        z-index: 6; pointer-events: none;
-      }
-      #shootBtn {
-        position: fixed; right: 20px; bottom: 20px; z-index: 11;
-        padding: 14px 22px; font-size: 18px; border-radius: 8px;
-        border: none; background: #f33; color: #fff;
-      }
+      #reticle { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+                 width: 80px; height: 80px; border: 2px solid rgba(0,255,0,.6); border-radius: 50%; box-shadow: 0 0 6px rgba(0,255,0,.6);
+                 z-index: 6; pointer-events: none; }
+      #shootBtn { position: fixed; right: 20px; bottom: 20px; z-index: 11; padding: 14px 22px; font-size: 18px; border-radius: 8px;
+                  border: none; background: #f33; color: #fff; }
     </style>
   </head>
   <body>
@@ -35,12 +25,14 @@
     <canvas id="view"></canvas>
     <canvas id="overlay"></canvas>
 
-    <!-- === 重要: まず cv.js, 次に aruco.js, posit1.js（姿勢推定用。使わないなら読み込まなくてOK） === -->
-    <script src="/vendor/aruco/cv.js"></script>
-    <script src="/vendor/aruco/aruco.js"></script>
-    <script src="/vendor/aruco/posit1.js"></script>
+    <!-- AprilTag WASM を読み込み（相対パス）。別ビルド名にも備え、Apriltag エイリアスを用意 -->
+    <script src="vendor/apriltag2/apriltag_wasm.js"></script>
+    <script>
+      // 一部ビルドは global 名が AprilTagWasm のことがあるので吸収
+      window.Apriltag = window.Apriltag || window.AprilTagWasm || window.AprilTag || window.apriltag;
+    </script>
 
-    <!-- あなたの処理（モジュールとして） -->
-    <script type="module" src="/src/main.js"></script>
+    <!-- あなたの処理 -->
+    <script type="module" src="src/main.js?v=20250728"></script>
   </body>
 </html>
