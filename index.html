@@ -6,15 +6,16 @@
     <title>ShootingAR (ArUco MIP_36h12)</title>
     <style>
       html, body { margin:0; padding:0; background:#000; color:#0f0; font-family:monospace; }
-      #hud { position:fixed; left:8px; top:8px; z-index:10; font-size:14px;
+      #hud { position:fixed; left:8px; top:8px; z-index:20; font-size:14px;
              max-height:40vh; overflow:auto; white-space:pre;
              background:rgba(0,0,0,.35); padding:6px 8px; border-radius:4px; }
       video, canvas { position:fixed; left:0; top:0; width:100vw; height:100vh; object-fit:cover; }
-      #overlay { z-index:5; pointer-events:none; }
+      #overlay { z-index:10; pointer-events:none; }
+      #fx      { z-index:15; pointer-events:none; }   /* ← フラッシュ専用。描画は消さない */
       #reticle { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
                  width:80px; height:80px; border:2px solid rgba(0,255,0,.6); border-radius:50%;
-                 box-shadow:0 0 6px rgba(0,255,0,.6); z-index:6; pointer-events:none; }
-      #shootBtn { position:fixed; right:20px; bottom:20px; z-index:11; padding:14px 22px;
+                 box-shadow:0 0 6px rgba(0,255,0,.6); z-index:14; pointer-events:none; }
+      #shootBtn { position:fixed; right:20px; bottom:20px; z-index:30; padding:14px 22px;
                   font-size:18px; border-radius:8px; border:none; background:#f33; color:#fff; }
     </style>
   </head>
@@ -24,8 +25,8 @@
     <button id="shootBtn">SHOOT</button>
 
     <video id="cam" autoplay playsinline muted></video>
-    <canvas id="view"></canvas>
-    <canvas id="overlay"></canvas>
+    <canvas id="overlay"></canvas> <!-- 検出枠・ID -->
+    <canvas id="fx"></canvas>      <!-- フラッシュ（検出描画で消さない） -->
 
     <!-- Node/AMD 判定で参照エラーを出す実装があるため、事前に未定義ガードを用意 -->
     <script> window.module=undefined; window.exports=undefined; window.require=undefined; </script>
@@ -34,7 +35,7 @@
     <script src="vendor/aruco/cv.js"></script>
     <script src="vendor/aruco/aruco.js"></script>
 
-    <!-- あなたの処理 -->
-    <script type="module" src="src/main.js?v=aruco_20250728"></script>
+    <!-- メイン -->
+    <script type="module" src="src/main.js?v=perf_flash_20250728"></script>
   </body>
 </html>
