@@ -1,38 +1,37 @@
-// ==== ShootingAR - ArUco (MIP_36h12) 改良版（フラッシュ可視化 + FPS/遅延改善）====
+// ==== ShootingAR - ArUco (MIP_36h12) 命中判定修正版 ====
 
 // ---------- DOM ----------
 const hud = document.getElementById('hud');
 const video = document.getElementById('cam');
-const overlay = document.getElementById('overlay');
-const fx = document.getElementById('fx');
+const overlay = document.getElementById('overlay');  // 検出描画
+const fx = document.getElementById('fx');            // フラッシュ専用
 const shootBtn = document.getElementById('shootBtn');
+const reticleEl = document.getElementById('reticle');
 
 // ---------- 設定（調整可） ----------
 const CONF = {
-  dictionaryName: 'ARUCO_MIP_36h12', // ← ここはMIP_36h12固定
-  maxHammingDistance: 5,             // 誤検出抑制（下げると厳しくなる）
-  sampleScale: 0.75,                 // 検出用に縮小して処理（0.6〜1.0 推奨）
-  detectEvery: 1,                    // 何フレームおきに検出するか（自動調整あり）
+  dictionaryName: 'ARUCO_MIP_36h12',
+  maxHammingDistance: 5,
+  sampleScale: 0.75,              // 検出用縮小率（0.6〜1.0）
+  detectEvery: 1,                 // 何フレームおきに検出（自動調整あり）
+  autoSkip: true,
+  targetDetectMs: 20,
   preFilter: 'contrast(1.12) brightness(1.04)',
-  reticleRadiusPx: 40,               // 命中半径(px)
-  fpsWindow: 30,                     // FPS 移動平均
-  autoSkip: true,                    // 自動スキップON
-  targetDetectMs: 20                 // 検出平均がこのmsを超えたらスキップ増やす
+
+  // ★命中判定まわり（今回の修正点）
+  requireStableForHit: false,     // ← 安定検出に限定せず、現フレーム検出もヒット対象に
+  hitWindowMs: 350,               // ← SHOOT後にヒットを受け付ける時間
+  // reticleRadius は DOM から算出（CSS→Canvas 変換）。固定にしたければ null を数値(px)に
+  fixedReticleRadiusPx: null
 };
 
 // ---------- ログ ----------
-function logHud(lines) {
-  hud.textContent = lines.join('\n');
-}
-function appendLog(...a) {
-  console.log(...a);
-}
+function logHud(lines) { hud.textContent = lines.join('\n'); }
+function appendLog(...a){ console.log(...a); }
 
 // ---------- Canvas ----------
 const oCtx = overlay.getContext('2d', { willReadFrequently: true });
 const fCtx = fx.getContext('2d', { willReadFrequently: true });
-
-// 検出専用のオフスクリーンキャンバス（画面には出さない）
 const detectCanvas = document.createElement('canvas');
 const dCtx = detectCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -46,13 +45,12 @@ async function openCamera() {
   video.srcObject = stream;
   await video.play();
 
-  // 画面キャンバスを実映像サイズに合わせる
   const vw = video.videoWidth || 960;
   const vh = video.videoHeight || 540;
+
   overlay.width = fx.width = vw;
   overlay.height = fx.height = vh;
 
-  // 検出は縮小キャンバスで（sampleScale）
   detectCanvas.width = Math.max(320, Math.round(vw * CONF.sampleScale));
   detectCanvas.height = Math.max(180, Math.round(vh * CONF.sampleScale));
 
@@ -82,22 +80,17 @@ let currentSkip = CONF.detectEvery;
 let prevIds = new Set();
 let stableIds = new Set();
 
-let lastShotAt = 0;
-let flashUntil = 0; // ミリ秒（performance.now基準）
+let lastShotAt = 0;  // SHOOT押下時刻（ms）
+let flashUntil = 0;  // フラッシュ終了予定時刻（ms）
 
-function calcAvg(arr) {
-  if (!arr.length) return 0;
-  return arr.reduce((a,b)=>a+b,0)/arr.length;
-}
+function calcAvg(arr){ return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
 
-// ---------- フラッシュ（fxキャンバスに描く：検出描画に消されない） ----------
+// ---------- フラッシュ ----------
 function showFlash(color='rgba(255,0,0,0.22)', durationMs=120) {
   flashUntil = performance.now() + durationMs;
-  // 即座に描く（次フレームまで待たない）
   fCtx.clearRect(0,0,fx.width,fx.height);
   fCtx.fillStyle = color;
   fCtx.fillRect(0,0,fx.width,fx.height);
-  // 一定時間後に消す（描画ループでも監視）
   setTimeout(() => {
     if (performance.now() >= flashUntil) fCtx.clearRect(0,0,fx.width,fx.height);
   }, durationMs + 16);
@@ -110,6 +103,20 @@ function updateStability(markers) {
   for (const id of ids) if (prevIds.has(id)) stable.add(id);
   stableIds = stable;
   prevIds = ids;
+}
+
+// ---------- レティクル半径（CSS→Canvasの変換） ----------
+function getReticleRadiusCanvasPx() {
+  if (typeof CONF.fixedReticleRadiusPx === 'number') return CONF.fixedReticleRadiusPx;
+
+  const rect = reticleEl.getBoundingClientRect(); // CSSピクセルでの直径
+  // overlay の CSSサイズ → Canvas内部ピクセルへの変換係数
+  const scaleX = overlay.width / overlay.clientWidth;
+  const scaleY = overlay.height / overlay.clientHeight;
+  const radiusCss = rect.width / 2;
+  // 画面は等方スケール想定。X,Y の平均で十分
+  const radiusCanvas = radiusCss * (scaleX + scaleY) / 2;
+  return radiusCanvas;
 }
 
 // ---------- 描画 ----------
@@ -134,7 +141,6 @@ function drawMarkers(markers, scaleX, scaleY) {
     oCtx.font = '16px monospace'; oCtx.fillText(String(m.id), cx+6, cy-6);
   }
 
-  // フラッシュの残像処理（必要時間を過ぎたら fx をクリア）
   if (flashUntil && performance.now() >= flashUntil) {
     fCtx.clearRect(0,0,fx.width,fx.height);
     flashUntil = 0;
@@ -143,7 +149,10 @@ function drawMarkers(markers, scaleX, scaleY) {
 
 // ---------- 命中判定 ----------
 function isHit(markers) {
-  const rx = overlay.width/2, ry = overlay.height/2, r2 = CONF.reticleRadiusPx ** 2;
+  const rx = overlay.width/2, ry = overlay.height/2;
+  const r = getReticleRadiusCanvasPx();
+  const r2 = r * r;
+
   for (const m of markers) {
     const dx = m.center.x - rx, dy = m.center.y - ry;
     if (dx*dx + dy*dy <= r2) return m;
@@ -153,7 +162,6 @@ function isHit(markers) {
 
 // ---------- 検出1回 ----------
 function detectOnce() {
-  // 軽い前処理（露出ゆれ対策）
   dCtx.filter = CONF.preFilter;
   dCtx.drawImage(video, 0, 0, detectCanvas.width, detectCanvas.height);
   dCtx.filter = 'none';
@@ -169,7 +177,7 @@ function detectOnce() {
   return markers;
 }
 
-// ---------- ループ（requestVideoFrameCallback優先） ----------
+// ---------- ループ ----------
 function tick() {
   const now = performance.now();
   const fps = 1000 / (now - lastTime);
@@ -183,10 +191,7 @@ function tick() {
     return;
   }
 
-  // 検出
   const markers = detectOnce();
-
-  // 検出結果を画面サイズへスケール
   const scaleX = overlay.width / detectCanvas.width;
   const scaleY = overlay.height / detectCanvas.height;
 
@@ -196,24 +201,33 @@ function tick() {
   // HUD
   const avgFps = calcAvg(fpsList).toFixed(1);
   const avgDet = calcAvg(detectMsList).toFixed(1);
+  const rpx = Math.round(getReticleRadiusCanvasPx());
+  const stableCount = [...stableIds].length;
   logHud([
-    `tags=${markers.length} (stable=${[...stableIds].length})`,
+    `tags=${markers.length} (stable=${stableCount})`,
     `fps(avg)=${avgFps}  dt(avg)=${avgDet}ms  skip=${currentSkip}`,
     `(screen ${overlay.width}x${overlay.height}) (detect ${detectCanvas.width}x${detectCanvas.height})`,
-    `dict=${CONF.dictionaryName}  maxHD=${CONF.maxHammingDistance}`
+    `dict=${CONF.dictionaryName}  maxHD=${CONF.maxHammingDistance}`,
+    `reticleR(px)=${rpx}  requireStableForHit=${CONF.requireStableForHit}`
   ]);
 
-  // SHOOT 後 200ms 以内にヒット判定（安定タグのみ）
-  if (performance.now() - lastShotAt < 200) {
-    const hit = isHit(markers.filter(m => stableIds.has(m.id)));
-    if (hit) { showFlash('rgba(0,255,0,0.30)', 140); lastShotAt = 0; }
+  // SHOOT 後 ヒット判定
+  if (now - lastShotAt < CONF.hitWindowMs) {
+    const candidate = CONF.requireStableForHit
+      ? markers.filter(m => stableIds.has(m.id))
+      : markers;
+    const hit = isHit(candidate);
+    if (hit) {
+      showFlash('rgba(0,255,0,0.30)', 140);
+      lastShotAt = 0; // 一度で終了
+    }
   }
 
   // 自動スキップ調整
   if (CONF.autoSkip && detectMsList.length >= 10) {
     const det = parseFloat(avgDet);
-    if (det > CONF.targetDetectMs + 10 && currentSkip < 3) currentSkip++;        // 重い → もっと間引く
-    else if (det < CONF.targetDetectMs - 5 && currentSkip > 1) currentSkip--;     // 余裕 → 間引きを減らす
+    if (det > CONF.targetDetectMs + 10 && currentSkip < 3) currentSkip++;
+    else if (det < CONF.targetDetectMs - 5 && currentSkip > 1) currentSkip--;
   }
 
   scheduleNext();
@@ -234,10 +248,16 @@ async function start() {
   scheduleNext();
   appendLog('AR.Detector ready. dict=', CONF.dictionaryName);
 
-  // クリック（タップ）時に赤フラッシュを即表示（検出で消されない）
   shootBtn.addEventListener('click', () => {
     lastShotAt = performance.now();
-    showFlash('rgba(255,0,0,0.22)', 100);
+    showFlash('rgba(255,0,0,0.22)', 100); // 押下時は赤
+  });
+
+  // 画面回転や表示サイズが変わったときも半径が追従するよう、resizeでHUD更新
+  window.addEventListener('resize', () => {
+    // HUDの半径表示だけ更新（判定は毎フレーム getReticleRadiusCanvasPx() で再計算）
+    const rpx = Math.round(getReticleRadiusCanvasPx());
+    appendLog('resize reticleR(px)=', rpx);
   });
 }
 
