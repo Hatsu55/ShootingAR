@@ -1,37 +1,46 @@
-// ==== ShootingAR - ArUco (MIP_36h12) 命中判定修正版 ====
+// ==== ShootingAR - ArUco (MIP_36h12) 命中/エフェクト整合 + 更新高速化 版 ====
 
 // ---------- DOM ----------
 const hud = document.getElementById('hud');
 const video = document.getElementById('cam');
 const overlay = document.getElementById('overlay');  // 検出描画
-const fx = document.getElementById('fx');            // フラッシュ専用
+const fx = document.getElementById('fx');            // フラッシュ専用（検出描画で消さない）
 const shootBtn = document.getElementById('shootBtn');
 const reticleEl = document.getElementById('reticle');
 
-// ---------- 設定（調整可） ----------
+// ---------- 設定（必要に応じて調整） ----------
 const CONF = {
   dictionaryName: 'ARUCO_MIP_36h12',
   maxHammingDistance: 5,
-  sampleScale: 0.75,              // 検出用縮小率（0.6〜1.0）
-  detectEvery: 1,                 // 何フレームおきに検出（自動調整あり）
-  autoSkip: true,
-  targetDetectMs: 20,
+
+  // 検出負荷と応答性のバランス
+  sampleScale: 0.85,      // 検出用縮小率（0.6〜1.0）。大きいほど安定/精度↑, ただし重い
+  detectEvery: 1,         // 何フレームおきに検出するか（=1で毎フレーム）
+  autoSkip: false,        // 自動スキップOFF（応答性優先）
+  targetDetectMs: 20,     // autoSkipを使う場合のみ有効
+
   preFilter: 'contrast(1.12) brightness(1.04)',
 
-  // ★命中判定まわり（今回の修正点）
-  requireStableForHit: false,     // ← 安定検出に限定せず、現フレーム検出もヒット対象に
-  hitWindowMs: 350,               // ← SHOOT後にヒットを受け付ける時間
-  // reticleRadius は DOM から算出（CSS→Canvas 変換）。固定にしたければ null を数値(px)に
-  fixedReticleRadiusPx: null
+  // ヒット判定
+  requireStableForHit: false, // 連続2フレームの安定検出に限定するなら true
+  hitWindowMs: 350,           // SHOOT後この時間だけ命中を受付
+
+  // レティクル半径：nullでDOMから自動算出。固定なら数値(px)を入れる
+  fixedReticleRadiusPx: null,
+
+  // HUD
+  fpsWindow: 30,
 };
 
 // ---------- ログ ----------
 function logHud(lines) { hud.textContent = lines.join('\n'); }
-function appendLog(...a){ console.log(...a); }
+function dbg(...a){ console.log(...a); }
 
 // ---------- Canvas ----------
 const oCtx = overlay.getContext('2d', { willReadFrequently: true });
 const fCtx = fx.getContext('2d', { willReadFrequently: true });
+
+// 検出専用のオフスクリーンキャンバス（画面には出さない）
 const detectCanvas = document.createElement('canvas');
 const dCtx = detectCanvas.getContext('2d', { willReadFrequently: true });
 
@@ -54,7 +63,7 @@ async function openCamera() {
   detectCanvas.width = Math.max(320, Math.round(vw * CONF.sampleScale));
   detectCanvas.height = Math.max(180, Math.round(vh * CONF.sampleScale));
 
-  appendLog('camera opened:', vw, 'x', vh, ' detect=', detectCanvas.width, 'x', detectCanvas.height);
+  dbg('camera opened:', vw, 'x', vh, ' detect=', detectCanvas.width, 'x', detectCanvas.height);
 }
 
 // ---------- 検出器 ----------
@@ -70,7 +79,7 @@ function createDetector() {
   });
 }
 
-// ---------- ループ制御 ----------
+// ---------- ループ制御・統計 ----------
 let lastTime = performance.now();
 let fpsList = [];
 let frameCount = 0;
@@ -80,12 +89,14 @@ let currentSkip = CONF.detectEvery;
 let prevIds = new Set();
 let stableIds = new Set();
 
-let lastShotAt = 0;  // SHOOT押下時刻（ms）
-let flashUntil = 0;  // フラッシュ終了予定時刻（ms）
+// SHOOTの扱い：赤は“ミス時のみ後出し”、緑は“命中時のみ”
+let shotSeq = 0;          // ショットごとにインクリメント
+let missTimer = null;     // 外したときに赤を出すための遅延タイマー
+let flashUntil = 0;       // フラッシュ終了予定時刻（ms）
 
 function calcAvg(arr){ return arr.length ? arr.reduce((a,b)=>a+b,0)/arr.length : 0; }
 
-// ---------- フラッシュ ----------
+// ---------- フラッシュ（fxキャンバスに描画） ----------
 function showFlash(color='rgba(255,0,0,0.22)', durationMs=120) {
   flashUntil = performance.now() + durationMs;
   fCtx.clearRect(0,0,fx.width,fx.height);
@@ -96,7 +107,7 @@ function showFlash(color='rgba(255,0,0,0.22)', durationMs=120) {
   }, durationMs + 16);
 }
 
-// ---------- 安定化（連続フレーム） ----------
+// ---------- 安定化（連続フレームで出ているIDだけ“安定”） ----------
 function updateStability(markers) {
   const ids = new Set(markers.map(m => m.id));
   const stable = new Set();
@@ -105,18 +116,14 @@ function updateStability(markers) {
   prevIds = ids;
 }
 
-// ---------- レティクル半径（CSS→Canvasの変換） ----------
+// ---------- レティクル半径（CSS→Canvas座標に変換） ----------
 function getReticleRadiusCanvasPx() {
   if (typeof CONF.fixedReticleRadiusPx === 'number') return CONF.fixedReticleRadiusPx;
-
   const rect = reticleEl.getBoundingClientRect(); // CSSピクセルでの直径
-  // overlay の CSSサイズ → Canvas内部ピクセルへの変換係数
   const scaleX = overlay.width / overlay.clientWidth;
   const scaleY = overlay.height / overlay.clientHeight;
   const radiusCss = rect.width / 2;
-  // 画面は等方スケール想定。X,Y の平均で十分
-  const radiusCanvas = radiusCss * (scaleX + scaleY) / 2;
-  return radiusCanvas;
+  return radiusCss * (scaleX + scaleY) / 2; // 等方スケール想定
 }
 
 // ---------- 描画 ----------
@@ -141,6 +148,7 @@ function drawMarkers(markers, scaleX, scaleY) {
     oCtx.font = '16px monospace'; oCtx.fillText(String(m.id), cx+6, cy-6);
   }
 
+  // フラッシュの残像管理
   if (flashUntil && performance.now() >= flashUntil) {
     fCtx.clearRect(0,0,fx.width,fx.height);
     flashUntil = 0;
@@ -152,7 +160,6 @@ function isHit(markers) {
   const rx = overlay.width/2, ry = overlay.height/2;
   const r = getReticleRadiusCanvasPx();
   const r2 = r * r;
-
   for (const m of markers) {
     const dx = m.center.x - rx, dy = m.center.y - ry;
     if (dx*dx + dy*dy <= r2) return m;
@@ -162,6 +169,7 @@ function isHit(markers) {
 
 // ---------- 検出1回 ----------
 function detectOnce() {
+  // 軽い前処理
   dCtx.filter = CONF.preFilter;
   dCtx.drawImage(video, 0, 0, detectCanvas.width, detectCanvas.height);
   dCtx.filter = 'none';
@@ -192,6 +200,7 @@ function tick() {
   }
 
   const markers = detectOnce();
+
   const scaleX = overlay.width / detectCanvas.width;
   const scaleY = overlay.height / detectCanvas.height;
 
@@ -211,19 +220,22 @@ function tick() {
     `reticleR(px)=${rpx}  requireStableForHit=${CONF.requireStableForHit}`
   ]);
 
-  // SHOOT 後 ヒット判定
-  if (now - lastShotAt < CONF.hitWindowMs) {
-    const candidate = CONF.requireStableForHit
-      ? markers.filter(m => stableIds.has(m.id))
-      : markers;
+  // ---- SHOOT後の命中／ミス判定 ----
+  if (shotSeq !== 0) {
+    // 候補：安定限定 or 現フレームのすべて
+    const candidate = CONF.requireStableForHit ? markers.filter(m => stableIds.has(m.id)) : markers;
     const hit = isHit(candidate);
     if (hit) {
+      // 命中 → 緑フラッシュのみ（赤は出さない）
+      clearTimeout(missTimer);
+      missTimer = null;
       showFlash('rgba(0,255,0,0.30)', 140);
-      lastShotAt = 0; // 一度で終了
+      shotSeq = 0;
     }
+    // ミス時の赤は setTimeout 側で発火（この瞬間は何もしない）
   }
 
-  // 自動スキップ調整
+  // 自動スキップ調整（OFFのときは無視）
   if (CONF.autoSkip && detectMsList.length >= 10) {
     const det = parseFloat(avgDet);
     if (det > CONF.targetDetectMs + 10 && currentSkip < 3) currentSkip++;
@@ -246,18 +258,31 @@ async function start() {
   await openCamera();
   createDetector();
   scheduleNext();
-  appendLog('AR.Detector ready. dict=', CONF.dictionaryName);
+  dbg('AR.Detector ready. dict=', CONF.dictionaryName);
 
+  // SHOOT：赤は“外したときだけ後出し”。ここでは赤を出さない。
   shootBtn.addEventListener('click', () => {
-    lastShotAt = performance.now();
-    showFlash('rgba(255,0,0,0.22)', 100); // 押下時は赤
+    // 新しいショットを開始
+    shotSeq++;
+    const mySeq = shotSeq;
+
+    // 既存ミスタイマーをクリア
+    if (missTimer) { clearTimeout(missTimer); missTimer = null; }
+
+    // ヒットウィンドウ終了時点でまだ同じショットが存続していれば「ミス」＝赤フラッシュ
+    missTimer = setTimeout(() => {
+      if (shotSeq === mySeq) {
+        showFlash('rgba(255,0,0,0.22)', 110); // ミスのみ赤
+        shotSeq = 0;
+        missTimer = null;
+      }
+    }, CONF.hitWindowMs);
   });
 
-  // 画面回転や表示サイズが変わったときも半径が追従するよう、resizeでHUD更新
+  // 画面回転や表示サイズが変わったときにHUD用の半径表示を更新
   window.addEventListener('resize', () => {
-    // HUDの半径表示だけ更新（判定は毎フレーム getReticleRadiusCanvasPx() で再計算）
     const rpx = Math.round(getReticleRadiusCanvasPx());
-    appendLog('resize reticleR(px)=', rpx);
+    dbg('resize reticleR(px)=', rpx);
   });
 }
 
