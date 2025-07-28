@@ -1,39 +1,40 @@
 <!doctype html>
 <html lang="ja">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>Shooting AR - Tag Test</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ShootingAR (ArUco MIP_36h12)</title>
     <style>
-      html,body { margin:0; padding:0; background:#000; color:#0f0; font-family:monospace; }
-      #wrap { position:fixed; inset:0; display:grid; place-items:center; }
-      #stage { position:relative; width:100vw; height:100vh; overflow:hidden; }
-      video, canvas { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
-      #hud { position:absolute; left:8px; top:8px; white-space:pre; text-shadow:0 0 6px #000; }
-      #reticle { position:absolute; inset:0; pointer-events:none; }
+      html, body { margin:0; padding:0; background:#000; color:#0f0; font-family:monospace; }
+      #hud { position:fixed; left:8px; top:8px; z-index:10; font-size:14px;
+             max-height:40vh; overflow:auto; white-space:pre;
+             background:rgba(0,0,0,.35); padding:6px 8px; border-radius:4px; }
+      video, canvas { position:fixed; left:0; top:0; width:100vw; height:100vh; object-fit:cover; }
+      #overlay { z-index:5; pointer-events:none; }
+      #reticle { position:fixed; left:50%; top:50%; transform:translate(-50%,-50%);
+                 width:80px; height:80px; border:2px solid rgba(0,255,0,.6); border-radius:50%;
+                 box-shadow:0 0 6px rgba(0,255,0,.6); z-index:6; pointer-events:none; }
+      #shootBtn { position:fixed; right:20px; bottom:20px; z-index:11; padding:14px 22px;
+                  font-size:18px; border-radius:8px; border:none; background:#f33; color:#fff; }
     </style>
-    <!-- AprilTag WASM (ARENAビルド / 非モジュール) -->
-    <script src="/ShootingAR/vendor/apriltag2/apriltag_wasm.js"></script>
   </head>
   <body>
-    <div id="wrap">
-      <div id="stage">
-        <video id="video" playsinline autoplay muted></video>
-        <canvas id="canvas" width="960" height="540"></canvas>
-        <canvas id="overlay" width="960" height="540"></canvas>
-        <div id="hud"></div>
-        <!-- レティクル（CSSで描画） -->
-        <svg id="reticle" viewBox="0 0 100 100">
-          <circle cx="50" cy="50" r="6" fill="none" stroke="#0f0" stroke-width="1.5"/>
-          <line x1="50" y1="0" x2="50" y2="20" stroke="#0f0" stroke-width="1.2"/>
-          <line x1="50" y1="80" x2="50" y2="100" stroke="#0f0" stroke-width="1.2"/>
-          <line x1="0" y1="50" x2="20" y2="50" stroke="#0f0" stroke-width="1.2"/>
-          <line x1="80" y1="50" x2="100" y2="50" stroke="#0f0" stroke-width="1.2"/>
-        </svg>
-      </div>
-    </div>
+    <div id="hud"></div>
+    <div id="reticle"></div>
+    <button id="shootBtn">SHOOT</button>
 
-    <!-- アプリ本体（ESM） -->
-    <script type="module" src="/ShootingAR/src/main.js"></script>
+    <video id="cam" autoplay playsinline muted></video>
+    <canvas id="view"></canvas>
+    <canvas id="overlay"></canvas>
+
+    <!-- Node/AMD 判定で参照エラーを出す実装があるため、事前に未定義ガードを用意 -->
+    <script> window.module=undefined; window.exports=undefined; window.require=undefined; </script>
+
+    <!-- ArUco（ブラウザ版） -->
+    <script src="vendor/aruco/cv.js"></script>
+    <script src="vendor/aruco/aruco.js"></script>
+
+    <!-- あなたの処理 -->
+    <script type="module" src="src/main.js?v=aruco_20250728"></script>
   </body>
 </html>
