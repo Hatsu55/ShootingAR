@@ -14,7 +14,7 @@ const CONF = {
   maxHammingDistance: 5,
 
   // 検出負荷と応答性のバランス
-  sampleScale: 0.85,      // 検出用縮小率（0.6〜1.0）。大きいほど安定/精度↑, ただし重い
+  sampleScale: 0.6,      // 検出用縮小率（0.6〜1.0）。大きいほど安定/精度↑, ただし重い
   detectEvery: 1,         // 何フレームおきに検出するか（=1で毎フレーム）
   autoSkip: false,        // 自動スキップOFF（応答性優先）
   targetDetectMs: 20,     // autoSkipを使う場合のみ有効
